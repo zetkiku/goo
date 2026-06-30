@@ -215,3 +215,223 @@ fn arithmetic_and_expressions() {
     let r = db.execute("SELECT a FROM c WHERE a / 0 = 0;").unwrap();
     assert_eq!(rows(&r).len(), 0);
 }
+
+
+#[test]
+fn transaction_commit_persists() {
+    let t = TestDb::new();
+    let mut db = t.open();
+    db.execute("CREATE TABLE tx (id INTEGER, v TEXT);").unwrap();
+    db.execute("BEGIN;").unwrap();
+    db.execute("INSERT INTO tx VALUES (1, 'a'), (2, 'b');").unwrap();
+    db.execute("COMMIT;").unwrap();
+    let r = db.execute("SELECT id FROM tx ORDER BY id;").unwrap();
+    assert_eq!(rows(&r).len(), 2);
+
+    // And it survives a reopen.
+    drop(db);
+    let mut db2 = t.open();
+    let r = db2.execute("SELECT id FROM tx;").unwrap();
+    assert_eq!(rows(&r).len(), 2);
+}
+
+#[test]
+fn transaction_rollback_discards_changes() {
+    let t = TestDb::new();
+    let mut db = t.open();
+    db.execute("CREATE TABLE tx (id INTEGER, v TEXT);").unwrap();
+    db.execute("INSERT INTO tx VALUES (1, 'original');").unwrap();
+
+    db.execute("BEGIN;").unwrap();
+    db.execute("INSERT INTO tx VALUES (2, 'temp'), (3, 'temp');")
+        .unwrap();
+    db.execute("UPDATE tx SET v = 'changed' WHERE id = 1;").unwrap();
+    db.execute("DELETE FROM tx WHERE id = 1;").unwrap();
+    // Inside the transaction the changes are visible.
+    let r = db.execute("SELECT id FROM tx;").unwrap();
+    assert_eq!(rows(&r).len(), 2); // ids 2 and 3
+    db.execute("ROLLBACK;").unwrap();
+
+    // After rollback we are back to the original single row, unchanged.
+    let r = db.execute("SELECT id, v FROM tx ORDER BY id;").unwrap();
+    let got = rows(&r);
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0][0], Value::Integer(1));
+    assert_eq!(got[0][1], Value::Text("original".into()));
+}
+
+#[test]
+fn rollback_undoes_create_table() {
+    let t = TestDb::new();
+    let mut db = t.open();
+    db.execute("BEGIN;").unwrap();
+    db.execute("CREATE TABLE gone (x INTEGER);").unwrap();
+    db.execute("INSERT INTO gone VALUES (1);").unwrap();
+    db.execute("ROLLBACK;").unwrap();
+    // The table should no longer exist.
+    assert!(db.execute("SELECT * FROM gone;").is_err());
+    assert!(db.table_names().is_empty());
+}
+
+#[test]
+fn rollback_survives_reopen() {
+    let t = TestDb::new();
+    {
+        let mut db = t.open();
+        db.execute("CREATE TABLE r (id INTEGER);").unwrap();
+        db.execute("INSERT INTO r VALUES (1);").unwrap();
+        db.execute("BEGIN;").unwrap();
+        db.execute("INSERT INTO r VALUES (2),(3),(4);").unwrap();
+        db.execute("ROLLBACK;").unwrap();
+    }
+    let mut db = t.open();
+    let r = db.execute("SELECT id FROM r;").unwrap();
+    assert_eq!(rows(&r).len(), 1, "rolled-back rows must not be persisted");
+}
+
+#[test]
+fn transaction_errors() {
+    let t = TestDb::new();
+    let mut db = t.open();
+    assert!(db.execute("COMMIT;").is_err()); // nothing to commit
+    assert!(db.execute("ROLLBACK;").is_err()); // nothing to roll back
+    db.execute("BEGIN;").unwrap();
+    assert!(db.execute("BEGIN;").is_err()); // already in a transaction
+    db.execute("ROLLBACK;").unwrap();
+}
+
+
+/// Helper to read a single scalar from the final SELECT's first row/column.
+fn scalar(results: &[QueryResult]) -> Value {
+    rows(results)[0][0].clone()
+}
+
+#[test]
+fn aggregates_without_group_by() {
+    let t = TestDb::new();
+    let mut db = t.open();
+    db.execute("CREATE TABLE nums (v INTEGER);").unwrap();
+    db.execute("INSERT INTO nums VALUES (10),(20),(30),(40);").unwrap();
+
+    assert_eq!(scalar(&db.execute("SELECT COUNT(*) FROM nums;").unwrap()), Value::Integer(4));
+    assert_eq!(scalar(&db.execute("SELECT SUM(v) FROM nums;").unwrap()), Value::Integer(100));
+    assert_eq!(scalar(&db.execute("SELECT MIN(v) FROM nums;").unwrap()), Value::Integer(10));
+    assert_eq!(scalar(&db.execute("SELECT MAX(v) FROM nums;").unwrap()), Value::Integer(40));
+    assert_eq!(scalar(&db.execute("SELECT AVG(v) FROM nums;").unwrap()), Value::Integer(25));
+
+    // Aggregate of an empty set: COUNT is 0, SUM is NULL.
+    db.execute("DELETE FROM nums;").unwrap();
+    assert_eq!(scalar(&db.execute("SELECT COUNT(*) FROM nums;").unwrap()), Value::Integer(0));
+    assert_eq!(scalar(&db.execute("SELECT SUM(v) FROM nums;").unwrap()), Value::Null);
+}
+
+#[test]
+fn group_by_with_aggregate() {
+    let t = TestDb::new();
+    let mut db = t.open();
+    db.execute("CREATE TABLE sales (dept TEXT, amount INTEGER);").unwrap();
+    db.execute(
+        "INSERT INTO sales VALUES ('a', 100), ('b', 200), ('a', 50), ('b', 25), ('a', 10);",
+    )
+    .unwrap();
+
+    let r = db
+        .execute("SELECT dept, SUM(amount) AS total FROM sales GROUP BY dept ORDER BY dept;")
+        .unwrap();
+    let got = rows(&r);
+    assert_eq!(got.len(), 2);
+    assert_eq!(got[0][0], Value::Text("a".into()));
+    assert_eq!(got[0][1], Value::Integer(160));
+    assert_eq!(got[1][0], Value::Text("b".into()));
+    assert_eq!(got[1][1], Value::Integer(225));
+
+    // COUNT per group, ordered by the count descending.
+    let r = db
+        .execute("SELECT dept, COUNT(*) AS n FROM sales GROUP BY dept ORDER BY n DESC;")
+        .unwrap();
+    let got = rows(&r);
+    assert_eq!(got[0][0], Value::Text("a".into()));
+    assert_eq!(got[0][1], Value::Integer(3));
+}
+
+#[test]
+fn aliases_in_output() {
+    let t = TestDb::new();
+    let mut db = t.open();
+    db.execute("CREATE TABLE x (a INTEGER);").unwrap();
+    db.execute("INSERT INTO x VALUES (5);").unwrap();
+    let r = db.execute("SELECT a + 1 AS next FROM x;").unwrap();
+    if let QueryResult::Select { columns, rows } = &r[0] {
+        assert_eq!(columns, &vec!["next".to_string()]);
+        assert_eq!(rows[0][0], Value::Integer(6));
+    } else {
+        panic!("expected select");
+    }
+}
+
+#[test]
+fn inner_join() {
+    let t = TestDb::new();
+    let mut db = t.open();
+    db.execute("CREATE TABLE users (id INTEGER, name TEXT);").unwrap();
+    db.execute("CREATE TABLE orders (id INTEGER, user_id INTEGER, item TEXT);")
+        .unwrap();
+    db.execute("INSERT INTO users VALUES (1, 'Ada'), (2, 'Linus');").unwrap();
+    db.execute(
+        "INSERT INTO orders VALUES (10, 1, 'book'), (11, 1, 'pen'), (12, 2, 'laptop');",
+    )
+    .unwrap();
+
+    let r = db
+        .execute(
+            "SELECT users.name, orders.item FROM users \
+             INNER JOIN orders ON users.id = orders.user_id \
+             ORDER BY orders.item;",
+        )
+        .unwrap();
+    let got = rows(&r);
+    assert_eq!(got.len(), 3);
+    // Sorted by item: book, laptop, pen
+    assert_eq!(got[0][0], Value::Text("Ada".into()));
+    assert_eq!(got[0][1], Value::Text("book".into()));
+    assert_eq!(got[1][0], Value::Text("Linus".into()));
+    assert_eq!(got[1][1], Value::Text("laptop".into()));
+    assert_eq!(got[2][0], Value::Text("Ada".into()));
+    assert_eq!(got[2][1], Value::Text("pen".into()));
+}
+
+#[test]
+fn join_with_aggregate_and_group_by() {
+    let t = TestDb::new();
+    let mut db = t.open();
+    db.execute("CREATE TABLE users (id INTEGER, name TEXT);").unwrap();
+    db.execute("CREATE TABLE orders (id INTEGER, user_id INTEGER);").unwrap();
+    db.execute("INSERT INTO users VALUES (1, 'Ada'), (2, 'Linus');").unwrap();
+    db.execute("INSERT INTO orders VALUES (10,1),(11,1),(12,2),(13,1);").unwrap();
+
+    let r = db
+        .execute(
+            "SELECT users.name, COUNT(*) AS orders FROM users \
+             JOIN orders ON users.id = orders.user_id \
+             GROUP BY users.name ORDER BY orders DESC;",
+        )
+        .unwrap();
+    let got = rows(&r);
+    assert_eq!(got[0][0], Value::Text("Ada".into()));
+    assert_eq!(got[0][1], Value::Integer(3));
+    assert_eq!(got[1][0], Value::Text("Linus".into()));
+    assert_eq!(got[1][1], Value::Integer(1));
+}
+
+#[test]
+fn ambiguous_column_is_an_error() {
+    let t = TestDb::new();
+    let mut db = t.open();
+    db.execute("CREATE TABLE a (id INTEGER);").unwrap();
+    db.execute("CREATE TABLE b (id INTEGER);").unwrap();
+    db.execute("INSERT INTO a VALUES (1);").unwrap();
+    db.execute("INSERT INTO b VALUES (1);").unwrap();
+    // `id` is ambiguous across the join; must be qualified.
+    let err = db.execute("SELECT id FROM a JOIN b ON a.id = b.id;");
+    assert!(err.is_err());
+}

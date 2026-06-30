@@ -4,6 +4,9 @@ use crate::value::{ColumnType, Value};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
+    Begin,
+    Commit,
+    Rollback,
     CreateTable {
         name: String,
         columns: Vec<(String, ColumnType)>,
@@ -16,13 +19,7 @@ pub enum Statement {
         columns: Option<Vec<String>>,
         rows: Vec<Vec<Expr>>,
     },
-    Select {
-        table: String,
-        projection: Projection,
-        filter: Option<Expr>,
-        order_by: Option<(String, bool)>, // (column, ascending)
-        limit: Option<i64>,
-    },
+    Select(SelectStmt),
     Update {
         table: String,
         assignments: Vec<(String, Expr)>,
@@ -34,16 +31,47 @@ pub enum Statement {
     },
 }
 
+/// A `SELECT` query, possibly with joins, aggregation, ordering, and a limit.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Projection {
-    All,
-    Columns(Vec<String>),
+pub struct SelectStmt {
+    pub items: Vec<SelectItem>,
+    pub from: String,
+    pub joins: Vec<Join>,
+    pub filter: Option<Expr>,
+    pub group_by: Vec<Expr>,
+    pub order_by: Option<(String, bool)>, // (output column name, ascending)
+    pub limit: Option<i64>,
+}
+
+/// An `INNER JOIN <table> ON <predicate>` clause.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Join {
+    pub table: String,
+    pub on: Expr,
+}
+
+/// One item in a SELECT projection list.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SelectItem {
+    /// `*` — every column of the (joined) input.
+    Wildcard,
+    /// An expression with an optional `AS` alias.
+    Expr { expr: Expr, alias: Option<String> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Literal(Value),
-    Column(String),
+    /// A column reference, optionally qualified by a table name (`t.col`).
+    Column {
+        table: Option<String>,
+        name: String,
+    },
+    /// An aggregate function. `arg == None` represents `COUNT(*)`.
+    Aggregate {
+        func: AggFunc,
+        arg: Option<Box<Expr>>,
+    },
     Unary {
         op: UnOp,
         expr: Box<Expr>,
@@ -53,6 +81,38 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AggFunc {
+    Count,
+    Sum,
+    Avg,
+    Min,
+    Max,
+}
+
+impl AggFunc {
+    pub fn from_name(s: &str) -> Option<AggFunc> {
+        Some(match s.to_ascii_uppercase().as_str() {
+            "COUNT" => AggFunc::Count,
+            "SUM" => AggFunc::Sum,
+            "AVG" => AggFunc::Avg,
+            "MIN" => AggFunc::Min,
+            "MAX" => AggFunc::Max,
+            _ => return None,
+        })
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            AggFunc::Count => "count",
+            AggFunc::Sum => "sum",
+            AggFunc::Avg => "avg",
+            AggFunc::Min => "min",
+            AggFunc::Max => "max",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

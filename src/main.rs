@@ -98,6 +98,9 @@ fn print_result(r: &QueryResult) {
         QueryResult::Inserted(n) => println!("{n} row(s) inserted."),
         QueryResult::Updated(n) => println!("{n} row(s) updated."),
         QueryResult::Deleted(n) => println!("{n} row(s) deleted."),
+        QueryResult::Begin => println!("BEGIN"),
+        QueryResult::Commit => println!("COMMIT"),
+        QueryResult::Rollback => println!("ROLLBACK"),
         QueryResult::Select { columns, rows } => print_table(columns, rows),
     }
 }

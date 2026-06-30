@@ -36,6 +36,15 @@ pub struct Pager {
     page_count: u32,
     freelist_head: PageId,
     catalog_page: PageId,
+
+    // --- transaction state ---
+    in_txn: bool,
+    /// Undo log: pre-image of each page touched since the transaction began.
+    /// `Some(bytes)` restores the page on rollback; `None` marks a page that
+    /// was newly allocated during the transaction (drop it on rollback).
+    undo: HashMap<PageId, Option<Box<[u8; PAGE_SIZE]>>>,
+    saved_page_count: u32,
+    saved_freelist: PageId,
 }
 
 impl Pager {
@@ -59,6 +68,10 @@ impl Pager {
                 page_count: 1, // meta page exists
                 freelist_head: 0,
                 catalog_page: 0,
+                in_txn: false,
+                undo: HashMap::new(),
+                saved_page_count: 0,
+                saved_freelist: 0,
             };
             let catalog = pager.allocate_page()?;
             pager.catalog_page = catalog;
@@ -91,6 +104,10 @@ impl Pager {
                 page_count,
                 freelist_head,
                 catalog_page,
+                in_txn: false,
+                undo: HashMap::new(),
+                saved_page_count: 0,
+                saved_freelist: 0,
             })
         }
     }
@@ -108,6 +125,12 @@ impl Pager {
     /// Load a page and return a mutable reference, marking it dirty.
     pub fn get_mut(&mut self, id: PageId) -> Result<&mut [u8; PAGE_SIZE]> {
         self.ensure_cached(id)?;
+        if self.in_txn {
+            // Record the pre-image once, the first time this page is modified.
+            self.undo
+                .entry(id)
+                .or_insert_with(|| self.cache.get(&id).cloned());
+        }
         self.dirty.insert(id);
         Ok(self.cache.get_mut(&id).unwrap())
     }
@@ -144,7 +167,55 @@ impl Pager {
         // Insert a zeroed page directly into the cache (no disk read needed).
         self.cache.insert(id, Box::new([0u8; PAGE_SIZE]));
         self.dirty.insert(id);
+        // Mark as newly allocated so a rollback drops it.
+        if self.in_txn {
+            self.undo.entry(id).or_insert(None);
+        }
         Ok(id)
+    }
+
+    // --- transactions ------------------------------------------------------
+
+    /// Begin a transaction. Subsequent modifications are buffered and can be
+    /// undone with `rollback_transaction`. Must be called when no transaction
+    /// is active and no uncommitted dirty pages exist.
+    pub fn begin_transaction(&mut self) {
+        self.in_txn = true;
+        self.undo.clear();
+        self.saved_page_count = self.page_count;
+        self.saved_freelist = self.freelist_head;
+    }
+
+    /// Commit the active transaction: flush all changes durably to disk.
+    pub fn commit_transaction(&mut self) -> Result<()> {
+        self.flush()?;
+        self.undo.clear();
+        self.in_txn = false;
+        Ok(())
+    }
+
+    /// Roll back the active transaction: restore every touched page to its
+    /// pre-transaction state and discard newly allocated pages.
+    pub fn rollback_transaction(&mut self) {
+        let entries: Vec<(PageId, Option<Box<[u8; PAGE_SIZE]>>)> = self.undo.drain().collect();
+        for (id, pre) in entries {
+            match pre {
+                Some(bytes) => {
+                    self.cache.insert(id, bytes);
+                }
+                None => {
+                    self.cache.remove(&id);
+                }
+            }
+        }
+        self.page_count = self.saved_page_count;
+        self.freelist_head = self.saved_freelist;
+        self.dirty.clear();
+        self.in_txn = false;
+    }
+
+    pub fn in_transaction(&self) -> bool {
+        self.in_txn
     }
 
     /// Return a page to the free list so a later allocation can reuse it.

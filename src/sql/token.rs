@@ -14,6 +14,7 @@ pub enum Token {
     Comma,
     Semicolon,
     Star,
+    Dot,
 
     Eq,
     Ne,
@@ -42,6 +43,10 @@ pub enum Keyword {
     Set,
     Delete,
     Drop,
+    Begin,
+    Commit,
+    Rollback,
+    Transaction,
     And,
     Or,
     Not,
@@ -56,6 +61,11 @@ pub enum Keyword {
     Text,
     True,
     False,
+    Join,
+    Inner,
+    On,
+    As,
+    Group,
 }
 
 fn keyword_from(s: &str) -> Option<Keyword> {
@@ -73,6 +83,10 @@ fn keyword_from(s: &str) -> Option<Keyword> {
         "SET" => Keyword::Set,
         "DELETE" => Keyword::Delete,
         "DROP" => Keyword::Drop,
+        "BEGIN" | "START" => Keyword::Begin,
+        "COMMIT" => Keyword::Commit,
+        "ROLLBACK" => Keyword::Rollback,
+        "TRANSACTION" => Keyword::Transaction,
         "AND" => Keyword::And,
         "OR" => Keyword::Or,
         "NOT" => Keyword::Not,
@@ -86,6 +100,11 @@ fn keyword_from(s: &str) -> Option<Keyword> {
         "TEXT" | "VARCHAR" | "STRING" => Keyword::Text,
         "TRUE" => Keyword::True,
         "FALSE" => Keyword::False,
+        "JOIN" => Keyword::Join,
+        "INNER" => Keyword::Inner,
+        "ON" => Keyword::On,
+        "AS" => Keyword::As,
+        "GROUP" => Keyword::Group,
         _ => return None,
     })
 }
@@ -148,6 +167,10 @@ impl<'a> Lexer<'a> {
             '*' => {
                 self.chars.next();
                 Ok(Token::Star)
+            }
+            '.' => {
+                self.chars.next();
+                Ok(Token::Dot)
             }
             '+' => {
                 self.chars.next();

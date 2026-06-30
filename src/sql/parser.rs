@@ -103,6 +103,21 @@ impl Parser {
 
     fn parse_statement(&mut self) -> Result<Statement> {
         match self.peek() {
+            Token::Keyword(Keyword::Begin) => {
+                self.advance();
+                self.eat_keyword(Keyword::Transaction);
+                Ok(Statement::Begin)
+            }
+            Token::Keyword(Keyword::Commit) => {
+                self.advance();
+                self.eat_keyword(Keyword::Transaction);
+                Ok(Statement::Commit)
+            }
+            Token::Keyword(Keyword::Rollback) => {
+                self.advance();
+                self.eat_keyword(Keyword::Transaction);
+                Ok(Statement::Rollback)
+            }
             Token::Keyword(Keyword::Create) => self.parse_create(),
             Token::Keyword(Keyword::Drop) => self.parse_drop(),
             Token::Keyword(Keyword::Insert) => self.parse_insert(),
@@ -214,23 +229,45 @@ impl Parser {
 
     fn parse_select(&mut self) -> Result<Statement> {
         self.expect_keyword(Keyword::Select)?;
-        let projection = if self.peek() == &Token::Star {
-            self.advance();
-            Projection::All
-        } else {
-            let mut cols = Vec::new();
-            loop {
-                cols.push(self.expect_identifier()?);
-                if self.peek() == &Token::Comma {
-                    self.advance();
+
+        // Projection: a comma-separated list of `*` or `<expr> [AS alias]`.
+        let mut items = Vec::new();
+        loop {
+            if self.peek() == &Token::Star {
+                self.advance();
+                items.push(SelectItem::Wildcard);
+            } else {
+                let expr = self.parse_expr(0)?;
+                let alias = if self.eat_keyword(Keyword::As) {
+                    Some(self.expect_identifier()?)
                 } else {
-                    break;
-                }
+                    None
+                };
+                items.push(SelectItem::Expr { expr, alias });
             }
-            Projection::Columns(cols)
-        };
+            if self.peek() == &Token::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
         self.expect_keyword(Keyword::From)?;
-        let table = self.expect_identifier()?;
+        let from = self.expect_identifier()?;
+
+        // Zero or more `[INNER] JOIN <table> ON <expr>` clauses.
+        let mut joins = Vec::new();
+        loop {
+            self.eat_keyword(Keyword::Inner);
+            if self.eat_keyword(Keyword::Join) {
+                let table = self.expect_identifier()?;
+                self.expect_keyword(Keyword::On)?;
+                let on = self.parse_expr(0)?;
+                joins.push(Join { table, on });
+            } else {
+                break;
+            }
+        }
 
         let filter = if self.eat_keyword(Keyword::Where) {
             Some(self.parse_expr(0)?)
@@ -238,9 +275,25 @@ impl Parser {
             None
         };
 
+        let group_by = if self.eat_keyword(Keyword::Group) {
+            self.expect_keyword(Keyword::By)?;
+            let mut exprs = Vec::new();
+            loop {
+                exprs.push(self.parse_expr(0)?);
+                if self.peek() == &Token::Comma {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            exprs
+        } else {
+            Vec::new()
+        };
+
         let order_by = if self.eat_keyword(Keyword::Order) {
             self.expect_keyword(Keyword::By)?;
-            let col = self.expect_identifier()?;
+            let col = self.parse_order_column()?;
             let asc = if self.eat_keyword(Keyword::Desc) {
                 false
             } else {
@@ -265,13 +318,28 @@ impl Parser {
             None
         };
 
-        Ok(Statement::Select {
-            table,
-            projection,
+        Ok(Statement::Select(SelectStmt {
+            items,
+            from,
+            joins,
             filter,
+            group_by,
             order_by,
             limit,
-        })
+        }))
+    }
+
+    /// Parse an ORDER BY column, accepting an optional table qualifier.
+    /// Ordering matches against output column names, so we keep the final
+    /// (column) segment.
+    fn parse_order_column(&mut self) -> Result<String> {
+        let first = self.expect_identifier()?;
+        if self.peek() == &Token::Dot {
+            self.advance();
+            self.expect_identifier()
+        } else {
+            Ok(first)
+        }
     }
 
     fn parse_update(&mut self) -> Result<Statement> {
@@ -396,12 +464,52 @@ impl Parser {
             }
             Token::Identifier(name) => {
                 self.advance();
-                Ok(Expr::Column(name))
+                // Aggregate / function call:  NAME ( ... )
+                if self.peek() == &Token::LParen {
+                    return self.parse_function_call(name);
+                }
+                // Qualified column:  table . column
+                if self.peek() == &Token::Dot {
+                    self.advance();
+                    let col = self.expect_identifier()?;
+                    return Ok(Expr::Column {
+                        table: Some(name),
+                        name: col,
+                    });
+                }
+                Ok(Expr::Column { table: None, name })
             }
             other => Err(DbError::Parse(format!(
                 "unexpected token in expression: {other:?}"
             ))),
         }
+    }
+
+    /// Parse a function call once the function name and `(` lookahead are known.
+    /// Only aggregate functions are supported.
+    fn parse_function_call(&mut self, name: String) -> Result<Expr> {
+        let func = AggFunc::from_name(&name).ok_or_else(|| {
+            DbError::Parse(format!("unknown function '{name}'"))
+        })?;
+        self.expect(&Token::LParen)?;
+        // COUNT(*) is the only place `*` is allowed as an argument.
+        if self.peek() == &Token::Star {
+            self.advance();
+            self.expect(&Token::RParen)?;
+            if func != AggFunc::Count {
+                return Err(DbError::Parse(format!(
+                    "{}(*) is not supported; only COUNT(*)",
+                    name.to_ascii_uppercase()
+                )));
+            }
+            return Ok(Expr::Aggregate { func, arg: None });
+        }
+        let arg = self.parse_expr(0)?;
+        self.expect(&Token::RParen)?;
+        Ok(Expr::Aggregate {
+            func,
+            arg: Some(Box::new(arg)),
+        })
     }
 }
 

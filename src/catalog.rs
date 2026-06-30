@@ -28,6 +28,7 @@ impl TableDef {
     }
 }
 
+#[derive(Clone)]
 pub struct Catalog {
     // BTreeMap keeps a stable, sorted iteration order.
     tables: BTreeMap<String, TableDef>,
