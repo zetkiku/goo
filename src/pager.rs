@@ -146,7 +146,8 @@ impl Pager {
             )));
         }
         let mut buf = Box::new([0u8; PAGE_SIZE]);
-        self.file.seek(SeekFrom::Start(id as u64 * PAGE_SIZE as u64))?;
+        self.file
+            .seek(SeekFrom::Start(id as u64 * PAGE_SIZE as u64))?;
         self.file.read_exact(buf.as_mut_slice())?;
         self.cache.insert(id, buf);
         Ok(())

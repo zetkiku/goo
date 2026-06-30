@@ -240,7 +240,12 @@ impl BTree {
 
     /// Split an overflowing leaf into [page | new_page] and return the
     /// separator (smallest key of the right leaf) for the parent.
-    fn split_leaf(&mut self, pager: &mut Pager, page: PageId, leaf: LeafNode) -> Result<SplitResult> {
+    fn split_leaf(
+        &mut self,
+        pager: &mut Pager,
+        page: PageId,
+        leaf: LeafNode,
+    ) -> Result<SplitResult> {
         let total: usize = leaf.cells.iter().map(|(_, v)| 12 + v.len()).sum();
         // Greedy split: smallest prefix whose tail (right side) fits in a leaf.
         // Because every individual cell is <= LEAF_USABLE/2, both halves fit.
@@ -380,7 +385,6 @@ impl BTree {
         Ok(out)
     }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -1,5 +1,10 @@
 # FerroDB
 
+[![CI](https://github.com/zetkiku/goo/actions/workflows/ci.yml/badge.svg)](https://github.com/zetkiku/goo/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)
+![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)
+
 A small but **real** persistent SQL database engine, written from scratch in Rust —
 no SQLite, no ORM, no third-party crates at all. Just bytes, disk pages, and a B+Tree.
 

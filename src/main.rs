@@ -3,8 +3,9 @@
 //! Usage:
 //!   ferrodb [DB_PATH]      # defaults to ./ferro.db
 //!
-//! Reads SQL from stdin. Statements are accumulated until a `;` and then
-//! executed. Lines beginning with `.` are meta-commands:
+//! Reads SQL from stdin. Statements are accumulated until a `;` that lies
+//! outside a string literal, then executed. Lines beginning with `.` are
+//! meta-commands:
 //!   .tables    list tables
 //!   .help      show help
 //!   .exit      quit
@@ -15,7 +16,9 @@ use ferrodb::engine::{Database, QueryResult};
 use ferrodb::value::Value;
 
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or_else(|| "ferro.db".to_string());
+    let path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "ferro.db".to_string());
 
     let mut db = match Database::open(&path) {
         Ok(db) => db,
@@ -66,18 +69,50 @@ fn main() {
         buffer.push_str(&line);
         buffer.push('\n');
 
-        // Execute every complete (semicolon-terminated) statement in the buffer.
-        if buffer.contains(';') {
-            run(&mut db, &buffer);
-            buffer.clear();
+        // Execute up to the last statement terminator that lies *outside* a
+        // string literal, keeping any trailing partial statement buffered.
+        if let Some(idx) = last_terminator(&buffer) {
+            let complete = buffer[..idx].to_string();
+            let remainder = buffer[idx..].to_string();
+            run(&mut db, &complete);
+            buffer = remainder;
         }
-        print_prompt(interactive, buffer.is_empty());
+        print_prompt(interactive, buffer.trim().is_empty());
     }
 
     // Execute any trailing statement without a final semicolon.
     if !buffer.trim().is_empty() {
         run(&mut db, &buffer);
     }
+}
+
+/// Find the byte index just past the last `;` that is not inside a string
+/// literal. Returns `None` when the buffer holds no complete statement yet
+/// (e.g. a semicolon that only appears inside an unterminated string).
+///
+/// Mirrors the lexer's string rules: single quotes delimit strings and a
+/// doubled `''` is an escaped quote that stays inside the string.
+fn last_terminator(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut in_string = false;
+    let mut last = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\'' if in_string => {
+                if bytes.get(i + 1) == Some(&b'\'') {
+                    i += 2; // escaped quote -> remain in string
+                    continue;
+                }
+                in_string = false;
+            }
+            b'\'' => in_string = true,
+            b';' if !in_string => last = Some(i + 1),
+            _ => {}
+        }
+        i += 1;
+    }
+    last
 }
 
 fn run(db: &mut Database, sql: &str) {
@@ -185,4 +220,36 @@ fn libc_isatty(fd: i32) -> bool {
 #[cfg(not(unix))]
 fn libc_isatty(_fd: i32) -> bool {
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::last_terminator;
+
+    #[test]
+    fn terminator_outside_string() {
+        assert_eq!(last_terminator("SELECT 1;"), Some(9));
+        assert_eq!(last_terminator("SELECT 1"), None);
+    }
+
+    #[test]
+    fn ignores_semicolon_inside_string() {
+        // The ';' is inside a string literal, so there is no real terminator.
+        assert_eq!(last_terminator("INSERT INTO t VALUES ('a;b'"), None);
+        // ...until the statement is actually terminated.
+        let s = "INSERT INTO t VALUES ('a;b');";
+        assert_eq!(last_terminator(s), Some(s.len()));
+    }
+
+    #[test]
+    fn handles_escaped_quotes() {
+        // 'it''s' is one string containing a quote; the ';' after closes it.
+        let s = "INSERT INTO t VALUES ('it''s; fine');";
+        assert_eq!(last_terminator(s), Some(s.len()));
+    }
+
+    #[test]
+    fn returns_last_of_multiple() {
+        assert_eq!(last_terminator("A; B; C"), Some(5));
+    }
 }

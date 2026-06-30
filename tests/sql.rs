@@ -59,11 +59,14 @@ fn create_insert_select_roundtrip() {
 fn where_filters_and_operators() {
     let t = TestDb::new();
     let mut db = t.open();
-    db.execute("CREATE TABLE n (x INTEGER, label TEXT);").unwrap();
+    db.execute("CREATE TABLE n (x INTEGER, label TEXT);")
+        .unwrap();
     db.execute("INSERT INTO n VALUES (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e');")
         .unwrap();
 
-    let r = db.execute("SELECT x FROM n WHERE x >= 3 AND x < 5;").unwrap();
+    let r = db
+        .execute("SELECT x FROM n WHERE x >= 3 AND x < 5;")
+        .unwrap();
     let got: Vec<i64> = rows(&r)
         .iter()
         .map(|row| match &row[0] {
@@ -90,10 +93,14 @@ fn where_filters_and_operators() {
 fn update_and_delete() {
     let t = TestDb::new();
     let mut db = t.open();
-    db.execute("CREATE TABLE p (id INTEGER, qty INTEGER);").unwrap();
-    db.execute("INSERT INTO p VALUES (1,10),(2,20),(3,30);").unwrap();
+    db.execute("CREATE TABLE p (id INTEGER, qty INTEGER);")
+        .unwrap();
+    db.execute("INSERT INTO p VALUES (1,10),(2,20),(3,30);")
+        .unwrap();
 
-    let r = db.execute("UPDATE p SET qty = qty * 2 WHERE id = 2;").unwrap();
+    let r = db
+        .execute("UPDATE p SET qty = qty * 2 WHERE id = 2;")
+        .unwrap();
     assert_eq!(r[0], QueryResult::Updated(1));
 
     let r = db.execute("SELECT qty FROM p WHERE id = 2;").unwrap();
@@ -118,8 +125,11 @@ fn limit_and_order_by() {
     let t = TestDb::new();
     let mut db = t.open();
     db.execute("CREATE TABLE s (v INTEGER);").unwrap();
-    db.execute("INSERT INTO s VALUES (5),(3),(9),(1),(7);").unwrap();
-    let r = db.execute("SELECT v FROM s ORDER BY v ASC LIMIT 3;").unwrap();
+    db.execute("INSERT INTO s VALUES (5),(3),(9),(1),(7);")
+        .unwrap();
+    let r = db
+        .execute("SELECT v FROM s ORDER BY v ASC LIMIT 3;")
+        .unwrap();
     let got: Vec<i64> = rows(&r)
         .iter()
         .map(|row| match &row[0] {
@@ -148,8 +158,10 @@ fn persistence_across_reopen() {
     let t = TestDb::new();
     {
         let mut db = t.open();
-        db.execute("CREATE TABLE k (id INTEGER, txt TEXT);").unwrap();
-        db.execute("INSERT INTO k VALUES (1, 'persisted');").unwrap();
+        db.execute("CREATE TABLE k (id INTEGER, txt TEXT);")
+            .unwrap();
+        db.execute("INSERT INTO k VALUES (1, 'persisted');")
+            .unwrap();
     } // db dropped, file flushed
     {
         let mut db = t.open();
@@ -205,7 +217,8 @@ fn errors_are_reported() {
 fn arithmetic_and_expressions() {
     let t = TestDb::new();
     let mut db = t.open();
-    db.execute("CREATE TABLE c (a INTEGER, b INTEGER);").unwrap();
+    db.execute("CREATE TABLE c (a INTEGER, b INTEGER);")
+        .unwrap();
     db.execute("INSERT INTO c VALUES (10, 3);").unwrap();
     let r = db
         .execute("SELECT a FROM c WHERE (a + b) * 2 = 26 AND NOT (a < b);")
@@ -216,14 +229,14 @@ fn arithmetic_and_expressions() {
     assert_eq!(rows(&r).len(), 0);
 }
 
-
 #[test]
 fn transaction_commit_persists() {
     let t = TestDb::new();
     let mut db = t.open();
     db.execute("CREATE TABLE tx (id INTEGER, v TEXT);").unwrap();
     db.execute("BEGIN;").unwrap();
-    db.execute("INSERT INTO tx VALUES (1, 'a'), (2, 'b');").unwrap();
+    db.execute("INSERT INTO tx VALUES (1, 'a'), (2, 'b');")
+        .unwrap();
     db.execute("COMMIT;").unwrap();
     let r = db.execute("SELECT id FROM tx ORDER BY id;").unwrap();
     assert_eq!(rows(&r).len(), 2);
@@ -240,12 +253,14 @@ fn transaction_rollback_discards_changes() {
     let t = TestDb::new();
     let mut db = t.open();
     db.execute("CREATE TABLE tx (id INTEGER, v TEXT);").unwrap();
-    db.execute("INSERT INTO tx VALUES (1, 'original');").unwrap();
+    db.execute("INSERT INTO tx VALUES (1, 'original');")
+        .unwrap();
 
     db.execute("BEGIN;").unwrap();
     db.execute("INSERT INTO tx VALUES (2, 'temp'), (3, 'temp');")
         .unwrap();
-    db.execute("UPDATE tx SET v = 'changed' WHERE id = 1;").unwrap();
+    db.execute("UPDATE tx SET v = 'changed' WHERE id = 1;")
+        .unwrap();
     db.execute("DELETE FROM tx WHERE id = 1;").unwrap();
     // Inside the transaction the changes are visible.
     let r = db.execute("SELECT id FROM tx;").unwrap();
@@ -300,7 +315,6 @@ fn transaction_errors() {
     db.execute("ROLLBACK;").unwrap();
 }
 
-
 /// Helper to read a single scalar from the final SELECT's first row/column.
 fn scalar(results: &[QueryResult]) -> Value {
     rows(results)[0][0].clone()
@@ -311,29 +325,50 @@ fn aggregates_without_group_by() {
     let t = TestDb::new();
     let mut db = t.open();
     db.execute("CREATE TABLE nums (v INTEGER);").unwrap();
-    db.execute("INSERT INTO nums VALUES (10),(20),(30),(40);").unwrap();
+    db.execute("INSERT INTO nums VALUES (10),(20),(30),(40);")
+        .unwrap();
 
-    assert_eq!(scalar(&db.execute("SELECT COUNT(*) FROM nums;").unwrap()), Value::Integer(4));
-    assert_eq!(scalar(&db.execute("SELECT SUM(v) FROM nums;").unwrap()), Value::Integer(100));
-    assert_eq!(scalar(&db.execute("SELECT MIN(v) FROM nums;").unwrap()), Value::Integer(10));
-    assert_eq!(scalar(&db.execute("SELECT MAX(v) FROM nums;").unwrap()), Value::Integer(40));
-    assert_eq!(scalar(&db.execute("SELECT AVG(v) FROM nums;").unwrap()), Value::Integer(25));
+    assert_eq!(
+        scalar(&db.execute("SELECT COUNT(*) FROM nums;").unwrap()),
+        Value::Integer(4)
+    );
+    assert_eq!(
+        scalar(&db.execute("SELECT SUM(v) FROM nums;").unwrap()),
+        Value::Integer(100)
+    );
+    assert_eq!(
+        scalar(&db.execute("SELECT MIN(v) FROM nums;").unwrap()),
+        Value::Integer(10)
+    );
+    assert_eq!(
+        scalar(&db.execute("SELECT MAX(v) FROM nums;").unwrap()),
+        Value::Integer(40)
+    );
+    assert_eq!(
+        scalar(&db.execute("SELECT AVG(v) FROM nums;").unwrap()),
+        Value::Integer(25)
+    );
 
     // Aggregate of an empty set: COUNT is 0, SUM is NULL.
     db.execute("DELETE FROM nums;").unwrap();
-    assert_eq!(scalar(&db.execute("SELECT COUNT(*) FROM nums;").unwrap()), Value::Integer(0));
-    assert_eq!(scalar(&db.execute("SELECT SUM(v) FROM nums;").unwrap()), Value::Null);
+    assert_eq!(
+        scalar(&db.execute("SELECT COUNT(*) FROM nums;").unwrap()),
+        Value::Integer(0)
+    );
+    assert_eq!(
+        scalar(&db.execute("SELECT SUM(v) FROM nums;").unwrap()),
+        Value::Null
+    );
 }
 
 #[test]
 fn group_by_with_aggregate() {
     let t = TestDb::new();
     let mut db = t.open();
-    db.execute("CREATE TABLE sales (dept TEXT, amount INTEGER);").unwrap();
-    db.execute(
-        "INSERT INTO sales VALUES ('a', 100), ('b', 200), ('a', 50), ('b', 25), ('a', 10);",
-    )
-    .unwrap();
+    db.execute("CREATE TABLE sales (dept TEXT, amount INTEGER);")
+        .unwrap();
+    db.execute("INSERT INTO sales VALUES ('a', 100), ('b', 200), ('a', 50), ('b', 25), ('a', 10);")
+        .unwrap();
 
     let r = db
         .execute("SELECT dept, SUM(amount) AS total FROM sales GROUP BY dept ORDER BY dept;")
@@ -373,14 +408,14 @@ fn aliases_in_output() {
 fn inner_join() {
     let t = TestDb::new();
     let mut db = t.open();
-    db.execute("CREATE TABLE users (id INTEGER, name TEXT);").unwrap();
+    db.execute("CREATE TABLE users (id INTEGER, name TEXT);")
+        .unwrap();
     db.execute("CREATE TABLE orders (id INTEGER, user_id INTEGER, item TEXT);")
         .unwrap();
-    db.execute("INSERT INTO users VALUES (1, 'Ada'), (2, 'Linus');").unwrap();
-    db.execute(
-        "INSERT INTO orders VALUES (10, 1, 'book'), (11, 1, 'pen'), (12, 2, 'laptop');",
-    )
-    .unwrap();
+    db.execute("INSERT INTO users VALUES (1, 'Ada'), (2, 'Linus');")
+        .unwrap();
+    db.execute("INSERT INTO orders VALUES (10, 1, 'book'), (11, 1, 'pen'), (12, 2, 'laptop');")
+        .unwrap();
 
     let r = db
         .execute(
@@ -404,10 +439,14 @@ fn inner_join() {
 fn join_with_aggregate_and_group_by() {
     let t = TestDb::new();
     let mut db = t.open();
-    db.execute("CREATE TABLE users (id INTEGER, name TEXT);").unwrap();
-    db.execute("CREATE TABLE orders (id INTEGER, user_id INTEGER);").unwrap();
-    db.execute("INSERT INTO users VALUES (1, 'Ada'), (2, 'Linus');").unwrap();
-    db.execute("INSERT INTO orders VALUES (10,1),(11,1),(12,2),(13,1);").unwrap();
+    db.execute("CREATE TABLE users (id INTEGER, name TEXT);")
+        .unwrap();
+    db.execute("CREATE TABLE orders (id INTEGER, user_id INTEGER);")
+        .unwrap();
+    db.execute("INSERT INTO users VALUES (1, 'Ada'), (2, 'Linus');")
+        .unwrap();
+    db.execute("INSERT INTO orders VALUES (10,1),(11,1),(12,2),(13,1);")
+        .unwrap();
 
     let r = db
         .execute(

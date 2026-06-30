@@ -95,7 +95,9 @@ impl Parser {
     fn expect_identifier(&mut self) -> Result<String> {
         match self.advance() {
             Token::Identifier(s) => Ok(s),
-            other => Err(DbError::Parse(format!("expected identifier, found {other:?}"))),
+            other => Err(DbError::Parse(format!(
+                "expected identifier, found {other:?}"
+            ))),
         }
     }
 
@@ -488,9 +490,8 @@ impl Parser {
     /// Parse a function call once the function name and `(` lookahead are known.
     /// Only aggregate functions are supported.
     fn parse_function_call(&mut self, name: String) -> Result<Expr> {
-        let func = AggFunc::from_name(&name).ok_or_else(|| {
-            DbError::Parse(format!("unknown function '{name}'"))
-        })?;
+        let func = AggFunc::from_name(&name)
+            .ok_or_else(|| DbError::Parse(format!("unknown function '{name}'")))?;
         self.expect(&Token::LParen)?;
         // COUNT(*) is the only place `*` is allowed as an argument.
         if self.peek() == &Token::Star {

@@ -128,7 +128,6 @@ pub fn decode_row(buf: &[u8], ncols: usize) -> Result<Row> {
     Ok(row)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -309,7 +309,9 @@ impl Database {
             let idx = columns
                 .iter()
                 .position(|c| c.eq_ignore_ascii_case(col))
-                .ok_or_else(|| DbError::Exec(format!("no such output column '{col}' in ORDER BY")))?;
+                .ok_or_else(|| {
+                    DbError::Exec(format!("no such output column '{col}' in ORDER BY"))
+                })?;
             out_rows.sort_by(|a, b| {
                 let ord = compare_values(&a[idx], &b[idx]).unwrap_or(Ordering::Equal);
                 if *asc {
@@ -549,10 +551,7 @@ impl QSchema {
             }
         }
         found.ok_or_else(|| {
-            let q = table
-                .as_ref()
-                .map(|t| format!("{t}."))
-                .unwrap_or_default();
+            let q = table.as_ref().map(|t| format!("{t}.")).unwrap_or_default();
             DbError::Exec(format!("no such column '{q}{name}'"))
         })
     }
@@ -583,9 +582,7 @@ fn expr_has_aggregate(expr: &Expr) -> bool {
     match expr {
         Expr::Aggregate { .. } => true,
         Expr::Unary { expr, .. } => expr_has_aggregate(expr),
-        Expr::Binary { left, right, .. } => {
-            expr_has_aggregate(left) || expr_has_aggregate(right)
-        }
+        Expr::Binary { left, right, .. } => expr_has_aggregate(left) || expr_has_aggregate(right),
         _ => false,
     }
 }
@@ -700,12 +697,16 @@ fn eval_grouped(expr: &Expr, group: &[Row], schema: &QSchema) -> Result<Value> {
             let l = eval_grouped(left, group, schema)?;
             let r = eval_grouped(right, group, schema)?;
             match op {
-                BinOp::And => Ok(Value::Integer(
-                    if l.is_truthy() && r.is_truthy() { 1 } else { 0 },
-                )),
-                BinOp::Or => Ok(Value::Integer(
-                    if l.is_truthy() || r.is_truthy() { 1 } else { 0 },
-                )),
+                BinOp::And => Ok(Value::Integer(if l.is_truthy() && r.is_truthy() {
+                    1
+                } else {
+                    0
+                })),
+                BinOp::Or => Ok(Value::Integer(if l.is_truthy() || r.is_truthy() {
+                    1
+                } else {
+                    0
+                })),
                 _ => eval_binary(*op, &l, &r),
             }
         }
@@ -791,7 +792,10 @@ fn eval_unary(op: UnOp, v: Value) -> Result<Value> {
         UnOp::Neg => match v {
             Value::Integer(n) => Ok(Value::Integer(-n)),
             Value::Null => Ok(Value::Null),
-            other => Err(DbError::Exec(format!("cannot negate {}", other.type_name()))),
+            other => Err(DbError::Exec(format!(
+                "cannot negate {}",
+                other.type_name()
+            ))),
         },
         UnOp::Not => Ok(Value::Integer(if v.is_truthy() { 0 } else { 1 })),
     }
@@ -803,13 +807,11 @@ fn eval_binary(op: BinOp, l: &Value, r: &Value) -> Result<Value> {
             Ok(eval_comparison(op, l, r))
         }
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => eval_arithmetic(op, l, r),
-        BinOp::And | BinOp::Or => {
-            Ok(Value::Integer(if l.is_truthy() && r.is_truthy() {
-                1
-            } else {
-                0
-            }))
-        }
+        BinOp::And | BinOp::Or => Ok(Value::Integer(if l.is_truthy() && r.is_truthy() {
+            1
+        } else {
+            0
+        })),
     }
 }
 
